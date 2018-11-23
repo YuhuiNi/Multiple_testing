@@ -1,0 +1,216 @@
+---
+title: "SATA 27850 Project"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+dataset1=read.csv2('dataset1.csv',sep=',',header=TRUE)
+```
+```{r}
+#data preprocessing
+dataset1$Start_Lati=as.character(dataset1$Start_Lati)
+dataset1$Start_Lati=as.numeric(dataset1$Start_Lati)
+dataset1$Start_Long=as.character(dataset1$Start_Long)
+dataset1$Start_Long=as.numeric(dataset1$Start_Long)
+dataset1$End_Lati=as.character(dataset1$End_Lati)
+dataset1$End_Lati=as.numeric(dataset1$End_Lati)
+dataset1$End_Long=as.character(dataset1$End_Long)
+dataset1$End_Long=as.numeric(dataset1$End_Long)
+dataset1$distance=sqrt((dataset1[,7]-dataset1[,9])^2+(dataset1[,8]-dataset1[,10])^2)
+dataset1$distance=(dataset1$distance-mean(dataset1$distance))/sd(dataset1$distance)
+dataset1$temp=as.numeric(dataset1$temp)
+dataset1$temp=(dataset1$temp-mean(dataset1$temp))/sd(dataset1$temp)
+dataset1$hum=as.numeric(dataset1$hum)
+dataset1$hum=(dataset1$hum-mean(dataset1$hum))/sd(dataset1$hum)
+dataset1$windspeed=as.numeric(dataset1$windspeed)
+dataset1$windspeed=(dataset1$windspeed-mean(dataset1$windspeed))/sd(dataset1$windspeed)
+dataset1$Duration=(dataset1$Duration-mean(dataset1$Duration))/sd(dataset1$Duration)
+dataset1$seasonN=as.factor(dataset1$seasonN)
+dataset1$daytime=as.factor(dataset1$daytime)
+```
+
+
+```{r}
+#do linear regression and get p values
+station=unique(dataset1$Start_station_number)
+station_number=c()
+n=length(station)
+index=c(1,2,4,5,6,7,8,9,10:15,18:21,23,26,27,28)  #remove unnecessary varibles
+p_matrix=matrix(0,nrow=n,ncol=4)
+count=1
+for(i in 1:n){
+  tempdata=dataset1[dataset1$Start_station_number==station[i],-index]
+  if(dim(tempdata)[1]>1 & length(unique(tempdata$seasonN))>1 & length(unique(tempdata$daytime))>1){
+    lmod=lm(Duration~.,tempdata)
+    m=summary(lmod)
+    if(!any(is.na(lmod$coefficients)) & length(lmod$coefficients)==11){
+      p_matrix[count,]=m$coefficients[8:11,4]
+      station_number=c(station_number,i)
+      count=count+1
+    }
+  }
+}
+p_matrix=p_matrix[1:(count-1),]
+```
+
+
+```{r}
+par(mfrow=c(2,2),mar=c(2,2,4,2))
+#plot p-value histogram for different features
+feature=colnames(tempdata)[4:7]
+for(i in 1:length(feature)){
+  h=hist(p_matrix[,i],breaks=20,plot=F)
+  plot(h,freq=F,xlab='',main=feature[i])
+}
+```
+
+```{r}
+BH=function(p,alpha,gamma){
+  n=length(p)
+  pi0=min(sum(p>gamma)/(1-gamma)/n,1)
+  phat=p*pi0
+  phat[p>gamma]=Inf
+  
+  #find largest k
+  y=rep(1,n) 
+  ind=order(phat)
+  for(i in n:1){
+    if(phat[ind[i]]<=alpha*i/n){
+      k=i
+      break
+    }
+  }
+  
+  #set reject hypothesis as 0
+  y[ind[1:k]]=0
+  
+  return(y)
+}
+```
+
+```{r}
+# BH procedure
+alpha=0.05
+gamma=0.5
+station=unique(dataset1$Start_station_number)
+station=station[station_number]
+feature_num=dim(p_matrix)[2]
+z=list()
+for(j in 1:feature_num){
+  y=BH(p_matrix[,j],alpha,gamma)
+  z[[feature[j]]]=station[y==0]
+}
+```
+
+
+
+```{r}
+#get unique station index
+nsample=length(station)
+station_index=c()
+for(i in 1:nsample){
+  station_index=c(station_index,which(dataset1$Start_station_number==station[i])[1])
+}
+
+#get cluster number
+location=as.matrix(dataset1[station_index,7:8])
+res=kmeans(location,centers=8,nstart=2)
+group_number=as.numeric(res$cluster)
+par(mar=c(4,4,1.5,1.5))
+plot(location,col=res$cluster,xlab="Lati",ylab="Long")
+points(res$cluster,col=1:8,pch=2)
+```
+
+```{r}
+group_adaptive_BH=function(P,group_sizes,alpha,gamma){
+  Phat=P
+  n=length(P)
+  num=length(group_sizes)
+  for(i in 1:num){
+    if(i==1){
+      index=c(1:group_sizes[i])
+    }else{
+      index=c((sum(group_sizes[1:(i-1)])+1):(sum(group_sizes[1:i])))
+    }
+    pizero=min(sum(P[index]>gamma)/group_sizes[i]/(1-gamma),1)
+    Phat[index]=P[index]*pizero
+  }
+  Phat[P>gamma]=Inf
+  
+  #find largest k
+  y=rep(0,n)
+  ind=order(Phat)
+  for(i in n:1){
+    if(Phat[ind[i]]<=alpha*i/n){
+      k=i
+      break
+    }
+  }
+  
+  #set reject hypothesis as 1
+  y[ind[1:k]]=1
+  
+  return(y)
+}
+```
+
+
+```{r}
+#group adaptive BH procedure
+group_size=as.numeric(table(res$cluster))
+p_matrix=p_matrix[order(res$cluster),]
+station=station[order(res$cluster)]
+alpha=0.05
+gamma=0.5
+feature_num=dim(p_matrix)[2]
+zz=list()
+
+for(j in 1:feature_num){
+  yy=group_adaptive_BH(p_matrix[,j],group_size,alpha,gamma)
+  zz[[feature[j]]]=station[yy==1]
+}
+```
+
+```{r}
+#plot rejected locations on same plot
+par(mfrow=c(2,2),mar=c(2,2,4,2))
+for(j in 1:4){
+nsample=length(z[[j]])
+station_index=c()
+for(i in 1:nsample){
+  station_index=c(station_index,which(dataset1$Start_station_number==z[[j]][i])[1])
+}
+
+#get cluster number
+location=as.matrix(dataset1[station_index,7:8])
+plot(location,col=2,xlab="Lati",ylab="Long",main=feature[j])
+
+nsample=length(zz[[j]])
+station_index=c()
+for(i in 1:nsample){
+  station_index=c(station_index,which(dataset1$Start_station_number==zz[[j]][i])[1])
+}
+
+#get cluster number
+location1=as.matrix(dataset1[station_index,7:8])
+points(location1,col=3,xlab="Lati",ylab="Long")
+
+z_intersect=intersect(z[[j]],zz[[j]])
+nsample=length(z_intersect)
+station_index=c()
+for(i in 1:nsample){
+  station_index=c(station_index,which(dataset1$Start_station_number==z_intersect[i])[1])
+}
+
+#get cluster number
+location2=as.matrix(dataset1[station_index,7:8])
+points(location2,col=4,xlab="Lati",ylab="Long")
+legend('topright',legend = c('unique BH','intersect of BH and group BH','unique group BH'),col=c(2,4,3),pch=1,cex=0.4)
+}
+```
+
+

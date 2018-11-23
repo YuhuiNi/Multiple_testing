@@ -1,0 +1,310 @@
+---
+title: "Prediction R codes"
+---
+```{r}
+hour = read.csv("/Users/Administrator/Desktop/2018Spring/STAT27850/project/data/dataset2.csv",header=TRUE,sep=",")
+# drop NA records in hour data
+hour <- hour[-c(which(is.na(hour$instant)==TRUE)),]
+# create peak hour indicator
+hour$peak_hour = rep(0,length(hour$instant))
+
+for (i in 1:length(hour$peak_hour)){
+  # weekend
+  if ((hour$weekday[i]==6)|(hour$weekday[i]==0)){
+    if(hour$hour[i]>=10 & hour$hour[i]<=17){
+      hour$peak_hour[i]=2
+    }
+  }
+  # weekday
+  else{
+    if((hour$hour[i]>=7 & hour$hour[i]<=9)|(hour$hour[i]>=17 & hour$hour[i]<=18)){
+        hour$peak_hour[i]=1
+    }
+  }
+}
+
+# make month, hour, weekday, weathersit factor variables
+hour$month <- factor(hour$month)
+hour$hour <- factor(hour$hour)
+hour$weekday <- factor(hour$weekday)
+hour$weathersit <- factor(hour$weathersit)
+hour$peak_hour <- factor(hour$peak_hour)
+
+# make factor variables dummy variables
+X_dummy<-model.matrix(~month+hour+weekday+weathersit+peak_hour,hour)
+X_other<- hour[,c(6,8,11:13,17,19)]
+X <-cbind(X_dummy,X_other)
+
+# scale the data
+X[,49:51] <- scale(X[,49:51],center=TRUE)
+```
+
+```{r}
+# training, validation and test data
+train <- X[which(X$day>=1 & X$day<=10),]
+val <- X[which(X$day>=11 & X$day<=20),]
+test <- X[which(X$day>=21),]
+
+X_ind <- c(2:52)
+y_ind <- 53
+Xtrain <- as.matrix(train[,X_ind])
+ytrain <- as.matrix(train[,y_ind])
+Xval <-  as.matrix(val[,X_ind])
+yval <- as.matrix(val[,y_ind])
+Xtest <-  as.matrix(test[,X_ind])
+ytest <- as.matrix(test[,y_ind])
+library(glmnet)
+```
+
+```{r}
+set.seed(100)
+
+alpha=seq(0,1,0.01)
+RMSE_train=rep(999,length(alpha))
+RMSE_val=rep(999,length(alpha))
+
+i=1 # use index i for each alpha
+for (a in alpha){
+  cv.lasso = cv.glmnet(Xtrain,ytrain,family="poisson",alpha=a)
+  # fit Generalized linear model via penalized maximum likelihood
+  Mod_lasso=glmnet(Xtrain,ytrain,family="poisson",alpha=a)
+  # coefficients of fitted model
+  coef_lasso = predict(Mod_lasso, type="coefficients", s = cv.lasso$lambda.min)
+  # fitted value
+  
+  # RSME on train set
+  RMSE_train[i]=sqrt(mean((ytrain-predict(Mod_lasso, Xtrain, type="response", s = cv.lasso$lambda.min))^2))
+  # RMSE on validation set
+  RMSE_val[i]=sqrt(mean((yval-predict(Mod_lasso, Xval, type="response", s = cv.lasso$lambda.min))^2))
+  if (RMSE_train[i]==min(RMSE_train)){
+      beta_optimal_mod=coef_lasso
+      alpha_optimal_mod=a
+  }
+i=i+1
+}
+```
+
+```{r}
+# optimal model
+optimal_mod <- glmnet(Xtrain,ytrain,family="poisson",alpha=alpha_optimal_mod)
+
+yhat_train=predict(optimal_mod, Xtrain, type="response", s = lambda_optimal_mod)
+yhat_val=predict(optimal_mod, Xval, type="response", s = lambda_optimal_mod)
+yhat_test=predict(optimal_mod, Xtest, type="response", s = lambda_optimal_mod)
+
+q_val = quantile(abs(yval-yhat_val),0.9)
+q_train=quantile(abs(ytrain-yhat_train),0.9)
+
+# coverage on training & test set, using q_train
+# c(mean(yhat_train - q_train <= ytrain & ytrain <= yhat_train + q_train),
+#	mean(yhat_test - q_train <= ytest & ytest <= yhat_test + q_train))
+# coverage on training & test set, using q_val
+c(mean(yhat_train - q_val <= ytrain & ytrain <= yhat_train + q_val),
+	mean(yhat_test - q_val <= ytest & ytest <= yhat_test + q_val))
+
+# width of interval
+train_PI_width=2*q_train
+val_PI_width=2*q_val
+c(train_PI_width,val_PI_width)
+# RMSE on test set
+# Mod_lasso
+RMSE_test=sqrt(mean((ytest-predict(optimal_mod, Xtest, type="response", s = cv.glmnet(Xtrain,ytrain,family="poisson",alpha=alpha_optimal_mod)$lambda.min))^2))
+# RMSE on train set using optimal alpha
+optimal_train_RMSE=min(RMSE_train)
+c(RMSE_test,optimal_train_RMSE)
+```
+
+```{r}
+plot.ts(ytest[1:240],ylab="hourly bike rental",main="prediction interval of hourly bike rental",ylim=c(-100,250))
+lines(yhat_test[1:240],col=2)
+lines(yhat_test[1:240] - q_val,lty=2,col="blue")
+lines(yhat_test[1:240] + q_val,lty=2,col="blue")
+legend("topright", legend=c("PI bound","real","estimate"),lty=c(2,1,1),col=c("blue","black","red"),cex=0.7)
+```
+
+```{r}
+day = read.csv("/Users/Administrator/Desktop/2018Spring/STAT27850/project/data/dataset4.csv",header=TRUE,sep=",")
+day <- day[,1:32]
+# make month, weekday factor variables
+day$month <- factor(day$month)
+
+
+# make factor variables dummy variables
+day_X_dummy<-model.matrix(~month,day)
+day_X_other<- day[,c(2,3,5,6:8,11:13,16,24:32)]
+day_X <-cbind(day_X_dummy,day_X_other)
+
+# scale the data
+day_X[,c(16:21,23:31)] <- scale(day_X[,c(16:21,23:31)],center=TRUE)
+
+# training, validation and test data
+train2 <- day_X[which(day_X$day>=1 & day_X$day<=10),]
+val2 <- day_X[which(day_X$day>=11 & day_X$day<=20),]
+test2 <- day_X[which(day_X$day>=21),]
+
+X_ind2 <- c(2:12,14:21,23:31)
+y_ind2 <- 22
+Xtrain2 <- as.matrix(train2[,X_ind2])
+ytrain2 <- as.matrix(train2[,y_ind2])
+Xval2 <-  as.matrix(val2[,X_ind2])
+yval2 <- as.matrix(val2[,y_ind2])
+Xtest2 <-  as.matrix(test2[,X_ind2])
+ytest2 <- as.matrix(test2[,y_ind2])
+```
+
+```{r}
+set.seed(100)
+
+alpha=seq(0,1,0.01)
+RMSE_train2=rep(999,length(alpha))
+RMSE_val2=rep(999,length(alpha))
+
+i=1 # use index i for each alpha
+for (a in alpha){
+  cv.lasso2 = cv.glmnet(Xtrain2,ytrain2,family="poisson",alpha=a)
+  # fit Generalized linear model via penalized maximum likelihood
+  Mod_lasso2=glmnet(Xtrain2,ytrain2,family="poisson",alpha=a)
+  # coefficients of fitted model
+  coef_lasso2 = predict(Mod_lasso2, type="coefficients", s = cv.lasso2$lambda.min)
+  # fitted value
+  
+  # RSME on train set
+  RMSE_train2[i]=sqrt(mean((ytrain2-predict(Mod_lasso2, Xtrain2, type="response", s = cv.lasso2$lambda.min))^2))
+  # RMSE on validation set
+  RMSE_val2[i]=sqrt(mean((yval2-predict(Mod_lasso2, Xval2, type="response", s = cv.lasso2$lambda.min))^2))
+  if (RMSE_train2[i]==min(RMSE_train2)){
+      beta_optimal_mod2=coef_lasso2
+      alpha_optimal_mod2=a
+  }
+  i=i+1
+}
+```
+
+
+```{r}
+# optimal model
+optimal_mod2 <- glmnet(Xtrain2,ytrain2,family="poisson",alpha=alpha_optimal_mod2)
+
+# lambda_optimal_mod2
+yhat_train2=predict(optimal_mod2, Xtrain2, type="response", s = lambda_optimal_mod2)
+yhat_val2=predict(optimal_mod2, Xval2, type="response", s = lambda_optimal_mod2)
+yhat_test2=predict(optimal_mod2, Xtest2, type="response", s = lambda_optimal_mod2)
+
+q_val2 = quantile(abs(yval2-yhat_val2),0.9)
+q_train2=quantile(abs(ytrain2-yhat_train2),0.9)
+
+# coverage on training & test set, using q_train
+# c(mean(yhat_train - q_train <= ytrain & ytrain <= yhat_train + q_train),
+#	mean(yhat_test - q_train <= ytest & ytest <= yhat_test + q_train))
+# coverage on training & test set, using q_val
+c(mean(yhat_train2 - q_val2 <= ytrain2 & ytrain2 <= yhat_train2 + q_val2),
+	mean(yhat_test2 - q_val2 <= ytest2 & ytest2 <= yhat_test2 + q_val2))
+
+# width of interval
+train_PI_width2=2*q_train2
+val_PI_width2=2*q_val2
+c(train_PI_width2,val_PI_width2)
+# RMSE on test set
+RMSE_test2=sqrt(mean((ytest2-predict(optimal_mod2, Xtest2, type="response", s = lambda_optimal_mod2))^2))
+# RMSE on train set using optimal alpha
+optimal_train_RMSE2=min(RMSE_train2)
+c(RMSE_test2,optimal_train_RMSE2)
+```
+
+```{r}
+plot.ts(ytest2,ylab="daily bike rental",main="prediction interval of daily bike rental",ylim=c(-100,7000))
+lines(yhat_test2,col=2)
+lines(yhat_test2 - q_val2,lty=2,col="blue")
+lines(yhat_test2 + q_val2,lty=2,col="blue")
+legend("topright", legend=c("PI bound","real","estimate"),lty=c(2,1,1),col=c("blue","black","red"),cex=0.9)
+```
+
+```{r}
+set.seed(100)
+lasso_cv=cv.glmnet(Xtrain2,ytrain2,alpha=1,nfold=10)
+lasso_fit=glmnet(Xtrain2,ytrain2,alpha=1)
+# s=lasso_cv$lambda.min
+coef.lasso=predict(lasso_fit,type="coefficients",s=lasso_cv$lambda.min)
+coef.lasso
+```
+
+```{r}
+X_ind2 <- c(2:12,14:21,24:25,28:31)
+y_ind2 <- 22
+Xtrain2 <- as.matrix(train2[,X_ind2])
+ytrain2 <- as.matrix(train2[,y_ind2])
+Xval2 <-  as.matrix(val2[,X_ind2])
+yval2 <- as.matrix(val2[,y_ind2])
+Xtest2 <-  as.matrix(test2[,X_ind2])
+ytest2 <- as.matrix(test2[,y_ind2])
+
+set.seed(100)
+
+alpha=seq(0,1,0.01)
+RMSE_train2=rep(999,length(alpha))
+RMSE_val2=rep(999,length(alpha))
+
+i=1 # use index i for each alpha
+for (a in alpha){
+  cv.lasso2 = cv.glmnet(Xtrain2,ytrain2,family="poisson",alpha=a)
+  # fit Generalized linear model via penalized maximum likelihood
+  Mod_lasso2=glmnet(Xtrain2,ytrain2,family="poisson",alpha=a)
+  # coefficients of fitted model
+  coef_lasso2 = predict(Mod_lasso2, type="coefficients", s = cv.lasso2$lambda.min)
+  # fitted value
+  
+  # RSME on train set
+  RMSE_train2[i]=sqrt(mean((ytrain2-predict(Mod_lasso2, Xtrain2, type="response", s = cv.lasso2$lambda.min))^2))
+  # RMSE on validation set
+  RMSE_val2[i]=sqrt(mean((yval2-predict(Mod_lasso2, Xval2, type="response", s = cv.lasso2$lambda.min))^2))
+  if (RMSE_train2[i]==min(RMSE_train2)){
+      beta_optimal_mod2=coef_lasso2
+      alpha_optimal_mod2=a
+  }
+  i=i+1
+}
+
+# alpha
+print(alpha_optimal_mod2)
+# lambda
+lambda_optimal_mod2 <- cv.glmnet(Xtrain2,ytrain2,family="poisson",alpha=alpha_optimal_mod2)$lambda.min
+print(cv.glmnet(Xtrain2,ytrain2,alpha=alpha_optimal_mod2)$lambda.min)
+```
+
+```{r}
+# optimal model
+optimal_mod2 <- glmnet(Xtrain2,ytrain2,family="poisson",alpha=alpha_optimal_mod2)
+
+# lambda_optimal_mod2
+yhat_train2=predict(optimal_mod2, Xtrain2, type="response", s = lambda_optimal_mod2)
+yhat_val2=predict(optimal_mod2, Xval2, type="response", s = lambda_optimal_mod2)
+yhat_test2=predict(optimal_mod2, Xtest2, type="response", s = lambda_optimal_mod2)
+
+q_val2 = quantile(abs(yval2-yhat_val2),0.9)
+q_train2=quantile(abs(ytrain2-yhat_train2),0.9)
+
+# coverage on training & test set, using q_train
+# c(mean(yhat_train - q_train <= ytrain & ytrain <= yhat_train + q_train),
+#	mean(yhat_test - q_train <= ytest & ytest <= yhat_test + q_train))
+# coverage on training & test set, using q_val
+c(mean(yhat_train2 - q_val2 <= ytrain2 & ytrain2 <= yhat_train2 + q_val2),
+	mean(yhat_test2 - q_val2 <= ytest2 & ytest2 <= yhat_test2 + q_val2))
+
+# width of interval
+train_PI_width2=2*q_train2
+val_PI_width2=2*q_val2
+c(train_PI_width2,val_PI_width2)
+# RMSE on test set
+RMSE_test2=sqrt(mean((ytest2-predict(optimal_mod2, Xtest2, type="response", s = lambda_optimal_mod2))^2))
+# RMSE on train set using optimal alpha
+optimal_train_RMSE2=min(RMSE_train2)
+c(RMSE_test2,optimal_train_RMSE2)
+```
+```{r}
+plot.ts(ytest2,ylab="daily bike rental",main="prediction interval of daily bike rental",ylim=c(-100,7000))
+lines(yhat_test2,col=2)
+lines(yhat_test2 - q_val2,lty=2,col="blue")
+lines(yhat_test2 + q_val2,lty=2,col="blue")
+legend("topright", legend=c("PI bound","real","estimate"),lty=c(2,1,1),col=c("blue","black","red"),cex=0.9)
+```
+
